@@ -15,6 +15,7 @@
     .btn-danger { background: #fff1f2; color: #e11d48; border-color: #fecdd3; }
     .btn-danger:hover { background: #ffe4e6; }
     .date-range { font-size: 13px; color: #64748b; margin-left: 6px; }
+    .status-text { font-size: 12px; color: #059669; margin-left: 10px; font-weight: bold; }
     
     table { width: 100%; border-collapse: collapse; background: white; border-radius: 12px; overflow: hidden; border: 1px solid #cbd5e1; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
     th { background: #ecfdf5; padding: 10px; border: 1px solid #cbd5e1; color: #065f46; font-size: 15px; }
@@ -22,55 +23,34 @@
     .time-col { background: #f8fafc; text-align: center; vertical-align: middle; font-weight: bold; width: 120px; font-size: 14px; }
     .pm-time { color: #059669; }
     
-    /* 左上角課名標籤 */
     .course-tag {
-      display: inline-block;
-      font-size: 11px;
-      font-weight: bold;
-      color: #047857;
-      background: #d1fae5;
-      padding: 1px 6px;
-      border-radius: 4px;
-      border: 1px solid #a7f3d0;
-      margin-bottom: 6px;
-      outline: none;
-      min-width: 20px;
+      display: inline-block; font-size: 11px; font-weight: bold; color: #047857; background: #d1fae5; padding: 1px 6px; border-radius: 4px; border: 1px solid #a7f3d0; margin-bottom: 6px; outline: none; min-width: 20px;
     }
     .course-tag:empty { display: none; }
     .course-tag:focus { background: #a7f3d0; border-color: #059669; display: inline-block; }
 
-    /* 進度內文編輯區 */
-    .plan-body {
-      font-size: 13px;
-      color: #1e293b;
-      min-height: 50px;
-      outline: none;
-      line-height: 1.4;
-      word-break: break-all;
-    }
+    .plan-body { font-size: 13px; color: #1e293b; min-height: 50px; outline: none; line-height: 1.4; word-break: break-all; }
     .plan-body:empty:before { content: "點擊輸入進度..."; color: #cbd5e1; font-style: italic; }
     td:hover { background-color: #f0fdf4; }
   </style>
 </head>
 <body>
 
-  <!-- 控制列 -->
   <div class="header-panel">
     <div class="week-controls">
       <button class="btn" onclick="changeWeek(-1)">&lt; 上一週</button>
       <select id="weekSelect" class="week-select" onchange="jumpToWeek(this.value)"></select>
       <button class="btn" onclick="changeWeek(1)">下一週 &gt;</button>
       <span id="dateRangeText" class="date-range"></span>
+      <span id="syncStatus" class="status-text">☁️ 雲端同步中...</span>
     </div>
     <div style="display:flex; gap:8px;">
       <button class="btn" onclick="copyLastWeek()">📋 複製上一週進度</button>
-      <button class="btn btn-primary" onclick="manualSave()">💾 儲存本週</button>
+      <button class="btn btn-primary" onclick="saveToCloud()">☁️ 儲存上傳至雲端</button>
       <button class="btn btn-danger" onclick="clearCurrentWeek()">🗑️ 清空本週進度</button>
-      <button class="btn" onclick="resetToDefaultCourses()">🔄 重設預設課表</button>
     </div>
   </div>
 
-  <!-- 課表區域 -->
   <table>
     <thead>
       <tr>
@@ -82,13 +62,13 @@
         <th>星期五<br><span id="d4" class="date-range"></span></th>
       </tr>
     </thead>
-    <tbody id="tableBody">
-      <!-- 由 JavaScript 自動繪製 -->
-    </tbody>
+    <tbody id="tableBody"></tbody>
   </table>
 
   <script>
-    // 基準開學日：2026-08-31 (第 1 週的星期一)
+    // ⚠️ 關鍵設定：請把下方引號內的網址替換成你在 npoint.io 取得的 API 網址
+    const CLOUD_URL = 'https://api.npoint.io/你的專屬ID網址';
+
     const BASE_MONDAY = new Date(2026, 7, 31); 
     const PERIODS = [
       { name: "第 1 節", time: "08:40-09:20", pm: false },
@@ -100,7 +80,6 @@
       { name: "第 7 節", time: "15:10-15:50", pm: true }
     ];
 
-    // 從圖片置入的預設課表資料
     const DEFAULT_COURSES = {
       "p0_d3": "世界 二1", "p0_d4": "英語 三2",
       "p1_d0": "世界 二1", "p1_d1": "世界 三3", "p1_d3": "世界 二2", "p1_d4": "英語 三2",
@@ -111,16 +90,12 @@
     };
 
     let currentWeek = 1;
+    let cloudData = { courses: DEFAULT_COURSES, plans: {} };
 
-    window.onload = function() {
+    window.onload = async function() {
       buildWeekDropdown();
       buildTableGrid();
-      
-      // 若第一次開啟，自動載入預設課表
-      if (!localStorage.getItem('global_courses')) {
-        localStorage.setItem('global_courses', JSON.stringify(DEFAULT_COURSES));
-      }
-      
+      await fetchFromCloud();
       loadWeekData(currentWeek);
     };
 
@@ -138,10 +113,8 @@
     function buildTableGrid() {
       const tbody = document.getElementById('tableBody');
       tbody.innerHTML = '';
-      
       PERIODS.forEach((p, pIndex) => {
         const tr = document.createElement('tr');
-        
         const timeTd = document.createElement('td');
         timeTd.className = 'time-col';
         timeTd.innerHTML = `${p.name}<br><small class="${p.pm ? 'pm-time' : ''}">${p.time}</small>`;
@@ -150,10 +123,9 @@
         for (let dIndex = 0; dIndex < 5; dIndex++) {
           const td = document.createElement('td');
           const cellId = `p${pIndex}_d${dIndex}`;
-          
           td.innerHTML = `
-            <div class="course-tag" contenteditable="true" id="course_${cellId}" oninput="saveGlobalCourses()"></div>
-            <div class="plan-body" contenteditable="true" id="plan_${cellId}" oninput="autoSavePlans()"></div>
+            <div class="course-tag" contenteditable="true" id="course_${cellId}"></div>
+            <div class="plan-body" contenteditable="true" id="plan_${cellId}"></div>
           `;
           tr.appendChild(td);
         }
@@ -161,20 +133,34 @@
       });
     }
 
+    async function fetchFromCloud() {
+      document.getElementById('syncStatus').innerText = '☁️ 雲端同步中...';
+      try {
+        const res = await fetch(CLOUD_URL);
+        const data = await res.json();
+        if (data && data.courses) {
+          cloudData = data;
+        } else {
+          // 初始化雲端資料
+          cloudData = { courses: DEFAULT_COURSES, plans: {} };
+        }
+        document.getElementById('syncStatus').innerText = '✅ 雲端已同步';
+      } catch (err) {
+        document.getElementById('syncStatus').innerText = '⚠️ 雲端讀取失敗，使用本機緩存';
+      }
+    }
+
     function loadWeekData(week) {
       currentWeek = week;
       document.getElementById('weekSelect').value = week;
 
-      // 日期計算
       const mon = new Date(BASE_MONDAY);
       mon.setDate(mon.getDate() + (week - 1) * 7);
 
       for (let i = 0; i < 5; i++) {
         const day = new Date(mon);
         day.setDate(day.getDate() + i);
-        const mStr = String(day.getMonth() + 1).padStart(2, '0');
-        const dStr = String(day.getDate()).padStart(2, '0');
-        document.getElementById(`d${i}`).innerText = `${mStr}/${dStr}`;
+        document.getElementById(`d${i}`).innerText = `${String(day.getMonth() + 1).padStart(2, '0')}/${String(day.getDate()).padStart(2, '0')}`;
       }
 
       const fri = new Date(mon);
@@ -182,8 +168,8 @@
       document.getElementById('dateRangeText').innerText = 
         `(${mon.getFullYear()}-${String(mon.getMonth()+1).padStart(2,'0')}-${String(mon.getDate()).padStart(2,'0')} ~ ${String(fri.getMonth()+1).padStart(2,'0')}-${String(fri.getDate()).padStart(2,'0')})`;
 
-      // 載入固定課名
-      const courses = JSON.parse(localStorage.getItem('global_courses') || '{}');
+      // 載入課名
+      const courses = cloudData.courses || DEFAULT_COURSES;
       for (let p = 0; p < 7; p++) {
         for (let d = 0; d < 5; d++) {
           const cellId = `p${p}_d${d}`;
@@ -193,7 +179,7 @@
       }
 
       // 載入當週進度
-      const plans = JSON.parse(localStorage.getItem(`weekly_plans_w${week}`) || '{}');
+      const plans = (cloudData.plans && cloudData.plans[`w${week}`]) || {};
       for (let p = 0; p < 7; p++) {
         for (let d = 0; d < 5; d++) {
           const cellId = `p${p}_d${d}`;
@@ -203,7 +189,10 @@
       }
     }
 
-    function saveGlobalCourses() {
+    async function saveToCloud() {
+      document.getElementById('syncStatus').innerText = '⏳ 上傳中...';
+      
+      // 收集當前課名
       const courses = {};
       for (let p = 0; p < 7; p++) {
         for (let d = 0; d < 5; d++) {
@@ -211,10 +200,8 @@
           courses[cellId] = document.getElementById(`course_${cellId}`).innerText;
         }
       }
-      localStorage.setItem('global_courses', JSON.stringify(courses));
-    }
 
-    function autoSavePlans() {
+      // 收集當週進度
       const plans = {};
       for (let p = 0; p < 7; p++) {
         for (let d = 0; d < 5; d++) {
@@ -222,54 +209,50 @@
           plans[cellId] = document.getElementById(`plan_${cellId}`).innerText;
         }
       }
-      localStorage.setItem(`weekly_plans_w${currentWeek}`, JSON.stringify(plans));
-    }
 
-    function manualSave() {
-      saveGlobalCourses();
-      autoSavePlans();
-      alert(`第 ${currentWeek} 週進度與課名已成功儲存！`);
+      cloudData.courses = courses;
+      if (!cloudData.plans) cloudData.plans = {};
+      cloudData.plans[`w${currentWeek}`] = plans;
+
+      try {
+        await fetch(CLOUD_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(cloudData)
+        });
+        document.getElementById('syncStatus').innerText = '✅ 儲存成功！手機重載頁面即可同步';
+        alert('進度已成功儲存至雲端！');
+      } catch (err) {
+        document.getElementById('syncStatus').innerText = '❌ 儲存失敗';
+        alert('儲存失敗，請檢查網路連線。');
+      }
     }
 
     function changeWeek(delta) {
       const target = currentWeek + delta;
       if (target >= 1 && target <= 20) {
-        autoSavePlans();
         loadWeekData(target);
       }
     }
 
     function jumpToWeek(week) {
-      autoSavePlans();
       loadWeekData(parseInt(week));
     }
 
     function copyLastWeek() {
-      if (currentWeek <= 1) {
-        alert('目前是第 1 週，沒有上一週可以複製喔！');
-        return;
-      }
-      const lastWeekPlans = localStorage.getItem(`weekly_plans_w${currentWeek - 1}`);
-      if (!lastWeekPlans) {
-        alert('上一週沒有儲存任何進度資料！');
-        return;
-      }
-      if (confirm(`確定要將「第 ${currentWeek - 1} 週」的進度複製覆蓋到「第 ${currentWeek} 週」嗎？`)) {
-        localStorage.setItem(`weekly_plans_w${currentWeek}`, lastWeekPlans);
+      if (currentWeek <= 1) return alert('目前是第 1 週，沒有上一週可複製！');
+      const lastWeekPlans = cloudData.plans && cloudData.plans[`w${currentWeek - 1}`];
+      if (!lastWeekPlans) return alert('上一週沒有進度資料！');
+      if (confirm(`確定複製「第 ${currentWeek - 1} 週」進度到「第 ${currentWeek} 週」嗎？`)) {
+        if (!cloudData.plans) cloudData.plans = {};
+        cloudData.plans[`w${currentWeek}`] = { ...lastWeekPlans };
         loadWeekData(currentWeek);
       }
     }
 
     function clearCurrentWeek() {
-      if (confirm(`確定要清空「第 ${currentWeek} 週」所有的進度計畫嗎？（課名不會被清空）`)) {
-        localStorage.removeItem(`weekly_plans_w${currentWeek}`);
-        loadWeekData(currentWeek);
-      }
-    }
-
-    function resetToDefaultCourses() {
-      if (confirm('確定要將課名還原為圖片中的預設課表嗎？')) {
-        localStorage.setItem('global_courses', JSON.stringify(DEFAULT_COURSES));
+      if (confirm(`確定清空「第 ${currentWeek} 週」的進度嗎？`)) {
+        if (cloudData.plans) delete cloudData.plans[`w${currentWeek}`];
         loadWeekData(currentWeek);
       }
     }
