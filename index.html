@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <title>每週教學進度管理表</title>
+  <style>
+    body { font-family: "Microsoft JhengHei", Arial, sans-serif; padding: 20px; background: #f8fafc; color: #334155; }
+    .header-panel { display: flex; justify-content: space-between; align-items: center; background: white; padding: 15px 20px; border-radius: 12px; margin-bottom: 16px; border: 1px solid #e2e8f0; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    .week-controls { display: flex; align-items: center; gap: 10px; }
+    .week-select { padding: 6px 12px; border-radius: 6px; border: 1px solid #cbd5e1; font-weight: bold; font-size: 15px; background: white; cursor: pointer; }
+    .btn { padding: 8px 14px; border: 1px solid #cbd5e1; border-radius: 6px; background: white; color: #334155; cursor: pointer; font-size: 14px; font-weight: 500; transition: all 0.2s; }
+    .btn:hover { background: #f1f5f9; }
+    .btn-primary { background: #059669; color: white; border-color: #059669; font-weight: bold; }
+    .btn-primary:hover { background: #047857; }
+    .btn-danger { background: #fff1f2; color: #e11d48; border-color: #fecdd3; }
+    .btn-danger:hover { background: #ffe4e6; }
+    .date-range { font-size: 13px; color: #64748b; margin-left: 6px; }
+    
+    table { width: 100%; border-collapse: collapse; background: white; border-radius: 12px; overflow: hidden; border: 1px solid #cbd5e1; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    th { background: #ecfdf5; padding: 10px; border: 1px solid #cbd5e1; color: #065f46; font-size: 15px; }
+    td { border: 1px solid #cbd5e1; vertical-align: top; padding: 8px; width: 16%; height: 85px; position: relative; }
+    .time-col { background: #f8fafc; text-align: center; vertical-align: middle; font-weight: bold; width: 120px; font-size: 14px; }
+    .pm-time { color: #059669; }
+    
+    /* 左上角課名標籤 */
+    .course-tag {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: bold;
+      color: #047857;
+      background: #d1fae5;
+      padding: 1px 6px;
+      border-radius: 4px;
+      border: 1px solid #a7f3d0;
+      margin-bottom: 6px;
+      outline: none;
+      min-width: 20px;
+    }
+    .course-tag:empty { display: none; }
+    .course-tag:focus { background: #a7f3d0; border-color: #059669; display: inline-block; }
+
+    /* 進度內文編輯區 */
+    .plan-body {
+      font-size: 13px;
+      color: #1e293b;
+      min-height: 50px;
+      outline: none;
+      line-height: 1.4;
+      word-break: break-all;
+    }
+    .plan-body:empty:before { content: "點擊輸入進度..."; color: #cbd5e1; font-style: italic; }
+    td:hover { background-color: #f0fdf4; }
+  </style>
+</head>
+<body>
+
+  <!-- 控制列 -->
+  <div class="header-panel">
+    <div class="week-controls">
+      <button class="btn" onclick="changeWeek(-1)">&lt; 上一週</button>
+      <select id="weekSelect" class="week-select" onchange="jumpToWeek(this.value)"></select>
+      <button class="btn" onclick="changeWeek(1)">下一週 &gt;</button>
+      <span id="dateRangeText" class="date-range"></span>
+    </div>
+    <div style="display:flex; gap:8px;">
+      <button class="btn" onclick="copyLastWeek()">📋 複製上一週進度</button>
+      <button class="btn btn-primary" onclick="manualSave()">💾 儲存本週</button>
+      <button class="btn btn-danger" onclick="clearCurrentWeek()">🗑️ 清空本週進度</button>
+      <button class="btn" onclick="resetToDefaultCourses()">🔄 重設預設課表</button>
+    </div>
+  </div>
+
+  <!-- 課表區域 -->
+  <table>
+    <thead>
+      <tr>
+        <th style="width:120px;">節次 / 時間</th>
+        <th>星期一<br><span id="d0" class="date-range"></span></th>
+        <th>星期二<br><span id="d1" class="date-range"></span></th>
+        <th>星期三<br><span id="d2" class="date-range"></span></th>
+        <th>星期四<br><span id="d3" class="date-range"></span></th>
+        <th>星期五<br><span id="d4" class="date-range"></span></th>
+      </tr>
+    </thead>
+    <tbody id="tableBody">
+      <!-- 由 JavaScript 自動繪製 -->
+    </tbody>
+  </table>
+
+  <script>
+    // 基準開學日：2026-08-31 (第 1 週的星期一)
+    const BASE_MONDAY = new Date(2026, 7, 31); 
+    const PERIODS = [
+      { name: "第 1 節", time: "08:40-09:20", pm: false },
+      { name: "第 2 節", time: "09:30-10:10", pm: false },
+      { name: "第 3 節", time: "10:30-11:10", pm: false },
+      { name: "第 4 節", time: "11:20-12:00", pm: false },
+      { name: "第 5 節", time: "13:20-14:00", pm: true },
+      { name: "第 6 節", time: "14:10-14:50", pm: true },
+      { name: "第 7 節", time: "15:10-15:50", pm: true }
+    ];
+
+    // 從圖片置入的預設課表資料
+    const DEFAULT_COURSES = {
+      "p0_d3": "世界 二1", "p0_d4": "英語 三2",
+      "p1_d0": "世界 二1", "p1_d1": "世界 三3", "p1_d3": "世界 二2", "p1_d4": "英語 三2",
+      "p2_d0": "英語 三5", "p2_d1": "世界 三2", "p2_d2": "世界 三5", "p2_d3": "英語 三1", "p2_d4": "世界 二2",
+      "p3_d0": "英語 三5", "p3_d1": "世界 三1", "p3_d2": "世界 三4", "p3_d3": "英語 三1",
+      "p4_d0": "英語 三4", "p4_d3": "英語 三3",
+      "p5_d0": "英語 三4", "p5_d3": "英語 三3"
+    };
+
+    let currentWeek = 1;
+
+    window.onload = function() {
+      buildWeekDropdown();
+      buildTableGrid();
+      
+      // 若第一次開啟，自動載入預設課表
+      if (!localStorage.getItem('global_courses')) {
+        localStorage.setItem('global_courses', JSON.stringify(DEFAULT_COURSES));
+      }
+      
+      loadWeekData(currentWeek);
+    };
+
+    function buildWeekDropdown() {
+      const select = document.getElementById('weekSelect');
+      select.innerHTML = '';
+      for (let i = 1; i <= 20; i++) {
+        const opt = document.createElement('option');
+        opt.value = i;
+        opt.innerText = `第 ${i} 週`;
+        select.appendChild(opt);
+      }
+    }
+
+    function buildTableGrid() {
+      const tbody = document.getElementById('tableBody');
+      tbody.innerHTML = '';
+      
+      PERIODS.forEach((p, pIndex) => {
+        const tr = document.createElement('tr');
+        
+        const timeTd = document.createElement('td');
+        timeTd.className = 'time-col';
+        timeTd.innerHTML = `${p.name}<br><small class="${p.pm ? 'pm-time' : ''}">${p.time}</small>`;
+        tr.appendChild(timeTd);
+
+        for (let dIndex = 0; dIndex < 5; dIndex++) {
+          const td = document.createElement('td');
+          const cellId = `p${pIndex}_d${dIndex}`;
+          
+          td.innerHTML = `
+            <div class="course-tag" contenteditable="true" id="course_${cellId}" oninput="saveGlobalCourses()"></div>
+            <div class="plan-body" contenteditable="true" id="plan_${cellId}" oninput="autoSavePlans()"></div>
+          `;
+          tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+      });
+    }
+
+    function loadWeekData(week) {
+      currentWeek = week;
+      document.getElementById('weekSelect').value = week;
+
+      // 日期計算
+      const mon = new Date(BASE_MONDAY);
+      mon.setDate(mon.getDate() + (week - 1) * 7);
+
+      for (let i = 0; i < 5; i++) {
+        const day = new Date(mon);
+        day.setDate(day.getDate() + i);
+        const mStr = String(day.getMonth() + 1).padStart(2, '0');
+        const dStr = String(day.getDate()).padStart(2, '0');
+        document.getElementById(`d${i}`).innerText = `${mStr}/${dStr}`;
+      }
+
+      const fri = new Date(mon);
+      fri.setDate(fri.getDate() + 4);
+      document.getElementById('dateRangeText').innerText = 
+        `(${mon.getFullYear()}-${String(mon.getMonth()+1).padStart(2,'0')}-${String(mon.getDate()).padStart(2,'0')} ~ ${String(fri.getMonth()+1).padStart(2,'0')}-${String(fri.getDate()).padStart(2,'0')})`;
+
+      // 載入固定課名
+      const courses = JSON.parse(localStorage.getItem('global_courses') || '{}');
+      for (let p = 0; p < 7; p++) {
+        for (let d = 0; d < 5; d++) {
+          const cellId = `p${p}_d${d}`;
+          const el = document.getElementById(`course_${cellId}`);
+          if (el) el.innerText = courses[cellId] || '';
+        }
+      }
+
+      // 載入當週進度
+      const plans = JSON.parse(localStorage.getItem(`weekly_plans_w${week}`) || '{}');
+      for (let p = 0; p < 7; p++) {
+        for (let d = 0; d < 5; d++) {
+          const cellId = `p${p}_d${d}`;
+          const el = document.getElementById(`plan_${cellId}`);
+          if (el) el.innerText = plans[cellId] || '';
+        }
+      }
+    }
+
+    function saveGlobalCourses() {
+      const courses = {};
+      for (let p = 0; p < 7; p++) {
+        for (let d = 0; d < 5; d++) {
+          const cellId = `p${p}_d${d}`;
+          courses[cellId] = document.getElementById(`course_${cellId}`).innerText;
+        }
+      }
+      localStorage.setItem('global_courses', JSON.stringify(courses));
+    }
+
+    function autoSavePlans() {
+      const plans = {};
+      for (let p = 0; p < 7; p++) {
+        for (let d = 0; d < 5; d++) {
+          const cellId = `p${p}_d${d}`;
+          plans[cellId] = document.getElementById(`plan_${cellId}`).innerText;
+        }
+      }
+      localStorage.setItem(`weekly_plans_w${currentWeek}`, JSON.stringify(plans));
+    }
+
+    function manualSave() {
+      saveGlobalCourses();
+      autoSavePlans();
+      alert(`第 ${currentWeek} 週進度與課名已成功儲存！`);
+    }
+
+    function changeWeek(delta) {
+      const target = currentWeek + delta;
+      if (target >= 1 && target <= 20) {
+        autoSavePlans();
+        loadWeekData(target);
+      }
+    }
+
+    function jumpToWeek(week) {
+      autoSavePlans();
+      loadWeekData(parseInt(week));
+    }
+
+    function copyLastWeek() {
+      if (currentWeek <= 1) {
+        alert('目前是第 1 週，沒有上一週可以複製喔！');
+        return;
+      }
+      const lastWeekPlans = localStorage.getItem(`weekly_plans_w${currentWeek - 1}`);
+      if (!lastWeekPlans) {
+        alert('上一週沒有儲存任何進度資料！');
+        return;
+      }
+      if (confirm(`確定要將「第 ${currentWeek - 1} 週」的進度複製覆蓋到「第 ${currentWeek} 週」嗎？`)) {
+        localStorage.setItem(`weekly_plans_w${currentWeek}`, lastWeekPlans);
+        loadWeekData(currentWeek);
+      }
+    }
+
+    function clearCurrentWeek() {
+      if (confirm(`確定要清空「第 ${currentWeek} 週」所有的進度計畫嗎？（課名不會被清空）`)) {
+        localStorage.removeItem(`weekly_plans_w${currentWeek}`);
+        loadWeekData(currentWeek);
+      }
+    }
+
+    function resetToDefaultCourses() {
+      if (confirm('確定要將課名還原為圖片中的預設課表嗎？')) {
+        localStorage.setItem('global_courses', JSON.stringify(DEFAULT_COURSES));
+        loadWeekData(currentWeek);
+      }
+    }
+  </script>
+</body>
+</html>
